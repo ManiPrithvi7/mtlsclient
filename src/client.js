@@ -128,7 +128,7 @@ function resolveMqttUrl() {
 
   if (/^mqtt:\/\//i.test(url)) {
     console.warn(
-      '[MQTT] URL used mqtt:// (no TLS). Client certificates are ignored on plain MQTT; switching to mqtts:// for mTLS with src/crts/.',
+      '[MQTT] URL used mqtt:// (no TLS). Client certificates are ignored on plain MQTT; switching to mqtts:// for mTLS (see src/certs/ or CRT_DIR).',
     );
     url = url.replace(/^mqtt:/i, 'mqtts:');
   }
@@ -181,8 +181,8 @@ function main() {
 
   const repoRoot = path.resolve(__dirname, '..', '..');
   const headerPath = path.resolve(repoRoot, env('DEVICE_KEYS_H', 'main/device_keys.h'));
-  // PEM bundle in repo: src/crts/ (see device_keys_from_header.js for filenames).
-  const crtDir = env('CRT_DIR', path.resolve(__dirname, 'crts'));
+  // PEM bundle: default src/certs/ (client.crt + client.key); override CRT_DIR or legacy src/crts/ layout.
+  const crtDir = env('CRT_DIR', path.resolve(__dirname, 'certs'));
 
   const useCrtDir = env('USE_CRT_DIR', '1') === '1';
   const { deviceId, ca, cert, key } = useCrtDir
@@ -235,8 +235,11 @@ function main() {
   let serverCa = null;
   if (brokerCaPem) {
     serverCa = caForBrokerTls(brokerCaPem);
-  } else if (useCustomCa) {
+  } else if (useCustomCa && nonEmpty(ca)) {
     serverCa = [...tls.rootCertificates, ca];
+  } else if (useCustomCa && !nonEmpty(ca)) {
+    console.warn('[MQTT] USE_CUSTOM_CA=1 but no device CA PEM in cert folder (add ca.crt / root-ca.crt or legacy root file); using system roots only');
+    serverCa = [...tls.rootCertificates];
   }
 
   // Name we expect on the server certificate (SAN/CN). Defaults from resolveTlsServername for bore.pub.
@@ -266,7 +269,7 @@ function main() {
       : 'no CONNECT user/pass (X.509-only if broker allows)';
 
   console.log(
-    `[MQTT] connect: clientId=${deviceId} url=${url} tlsVerifyHost=${tlsVerifyHostname || '(URL host)'} tlsStream=${useCustomTlsStream ? 'custom (SNI+cert name)' : 'mqtt.js'} tcpFamily=${ipFamily || 'default'} mTLS=${useCrtDir ? 'src/crts' : 'header'} brokerCA=${brokerCaPath || (useCustomCa ? 'USE_CUSTOM_CA+crts' : 'system')} mqttAuth=${authLabel}`,
+    `[MQTT] connect: clientId=${deviceId} url=${url} tlsVerifyHost=${tlsVerifyHostname || '(URL host)'} tlsStream=${useCustomTlsStream ? 'custom (SNI+cert name)' : 'mqtt.js'} tcpFamily=${ipFamily || 'default'} mTLS=${useCrtDir ? crtDir : 'header'} brokerCA=${brokerCaPath || (useCustomCa ? 'USE_CUSTOM_CA+device-ca' : 'system')} mqttAuth=${authLabel}`,
   );
 
   const will = {
@@ -422,7 +425,7 @@ function main() {
     }
     if (/unable to get (local )?issuer certificate|self signed certificate|UNABLE_TO_VERIFY_LEAF_SIGNATURE/i.test(msg)) {
       console.error(
-        `[MQTT] hint: client cannot verify the **server** cert — place EMQX broker CA as src/crts/broker-ca.crt, deploy/fly/broker-ca.crt, or set MQTT_BROKER_CA. (Not the same as UNKNOWN_CA below.)`,
+        `[MQTT] hint: client cannot verify the **server** cert — place broker CA as src/certs/broker-ca.crt (or CRT_DIR), deploy/fly/broker-ca.crt, or set MQTT_BROKER_CA. (Not the same as UNKNOWN_CA below.)`,
       );
     }
     if (/does not match certificate|altnames|cert's altnames/i.test(msg)) {
@@ -446,7 +449,7 @@ function main() {
         '[MQTT] hint (UNKNOWN_CA / alert 48): Mosquitto rejected your **client** cert — its chain is not signed by the CA in the broker\'s cafile (e.g. /data/ca/root-ca.crt). broker-ca.crt is only for **this app** to trust the **server**.',
       );
       console.error(
-        '[MQTT] fix: put a client cert+key in src/crts/ that is signed by the **same** root the broker trusts. Example: docker cp <statsmqtt-container>:/data/ca/root-ca.crt ./ then issue a new device cert from that CA; keep filenames expected by device_keys_from_header.js. Certs from EMQX/old CA will fail here.',
+        '[MQTT] fix: use client.crt + client.key (under src/certs/ or CRT_DIR) signed by the **same** CA the broker trusts. Add ca.crt/root-ca.crt if you use USE_CUSTOM_CA. Legacy filenames still supported — see device_keys_from_header.js.',
       );
     }
   });

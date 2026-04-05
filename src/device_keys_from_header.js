@@ -1,10 +1,11 @@
 const fs = require('node:fs');
+const path = require('node:path');
 const crypto = require('node:crypto');
 
 function commonNameFromCertPem(certPem) {
   try {
     const x509 = new crypto.X509Certificate(certPem);
-    const m = String(x509.subject).match(/CN\s*=\s*([^,+]+)/i);
+    const m = String(x509.subject).match(/CN\s*=\s*([^,\r\n]+)/i);
     return m ? m[1].trim() : null;
   } catch {
     return null;
@@ -80,17 +81,77 @@ function loadDeviceKeysFromHeader(headerPath) {
   return { deviceId, ca, cert, key };
 }
 
+function extractCertPemFromFile(filePath) {
+  const text = fs.readFileSync(filePath, 'utf8');
+  return (
+    extractFirstPemBlock(text, '-----BEGIN CERTIFICATE-----\n') ||
+    extractFirstPemBlock(text, '-----BEGIN CERTIFICATE-----')
+  );
+}
+
+function extractKeyPemFromFile(filePath) {
+  const text = fs.readFileSync(filePath, 'utf8');
+  return (
+    extractFirstPemBlock(text, '-----BEGIN RSA PRIVATE KEY-----\n') ||
+    extractFirstPemBlock(text, '-----BEGIN PRIVATE KEY-----\n') ||
+    extractFirstPemBlock(text, '-----BEGIN RSA PRIVATE KEY-----') ||
+    extractFirstPemBlock(text, '-----BEGIN PRIVATE KEY-----')
+  );
+}
+
+/**
+ * PEM layout for src/certs/: client.crt, client.key; optional ca.crt or root-ca.crt (device issuing CA, for USE_CUSTOM_CA).
+ * Legacy layout: root_certifacite.txt, device certificate CA signed.txt, privatekey_protect.txt
+ */
 function loadDeviceKeysFromCrtFolder(crtDir) {
-  const rootPath = `${crtDir}/root_certifacite.txt`;
-  const certPath = `${crtDir}/device certificate CA signed.txt`;
-  const keyPath = `${crtDir}/privatekey_protect.txt`;
+  const clientCrtPath = path.join(crtDir, 'client.crt');
+  const clientKeyPath = path.join(crtDir, 'client.key');
+  const useStandardPemNames = fs.existsSync(clientCrtPath) && fs.existsSync(clientKeyPath);
+
+  if (useStandardPemNames) {
+    const cert = extractCertPemFromFile(clientCrtPath);
+    const key = extractKeyPemFromFile(clientKeyPath);
+    if (!cert) throw new Error(`No certificate PEM in ${clientCrtPath}`);
+    if (!key) throw new Error(`No private key PEM in ${clientKeyPath}`);
+
+    let ca = '';
+    for (const name of ['ca.crt', 'root-ca.crt']) {
+      const p = path.join(crtDir, name);
+      if (fs.existsSync(p)) {
+        ca = extractCertPemFromFile(p) || '';
+        if (ca) break;
+      }
+    }
+    if (!ca) {
+      const legacyRoot = path.join(crtDir, 'root_certifacite.txt');
+      if (fs.existsSync(legacyRoot)) {
+        const rootTxt = fs.readFileSync(legacyRoot, 'utf8');
+        ca =
+          extractFirstPemBlock(rootTxt, '-----BEGIN CERTIFICATE-----\n') ||
+          extractFirstPemBlock(rootTxt, '-----BEGIN CERTIFICATE-----') ||
+          '';
+      }
+    }
+
+    const cn = commonNameFromCertPem(cert);
+    const deviceId = process.env.DEVICE_ID_OVERRIDE || cn || 'ADMIN-1';
+    return { deviceId, ca, cert, key };
+  }
+
+  const rootPath = path.join(crtDir, 'root_certifacite.txt');
+  const certPath = path.join(crtDir, 'device certificate CA signed.txt');
+  const keyPath = path.join(crtDir, 'privatekey_protect.txt');
 
   const rootTxt = fs.readFileSync(rootPath, 'utf8');
   const certTxt = fs.readFileSync(certPath, 'utf8');
   const keyTxt = fs.readFileSync(keyPath, 'utf8');
 
-  const ca = extractFirstPemBlock(rootTxt, '-----BEGIN CERTIFICATE-----\n') || extractFirstPemBlock(rootTxt, '-----BEGIN CERTIFICATE-----');
-  const cert = extractFirstPemBlock(certTxt, '-----BEGIN CERTIFICATE-----\n') || extractFirstPemBlock(certTxt, '-----BEGIN CERTIFICATE-----');
+  const ca =
+    extractFirstPemBlock(rootTxt, '-----BEGIN CERTIFICATE-----\n') ||
+    extractFirstPemBlock(rootTxt, '-----BEGIN CERTIFICATE-----');
+  const cert =
+    extractFirstPemBlock(certTxt, '-----BEGIN CERTIFICATE-----\n') ||
+    extractFirstPemBlock(certTxt, '-----BEGIN CERTIFICATE-----');
   const key =
     extractFirstPemBlock(keyTxt, '-----BEGIN RSA PRIVATE KEY-----\n') ||
     extractFirstPemBlock(keyTxt, '-----BEGIN PRIVATE KEY-----\n') ||

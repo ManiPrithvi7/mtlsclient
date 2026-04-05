@@ -4,7 +4,7 @@ Use this with `node src/client.js` / `npm start` and the current `src/client.js`
 
 ## 1. Broker address and tunnel
 
-- [ ] **`MQTT_URL`** uses **`mqtts://`** (TLS). **`mqtt://`** is plain TCP — **client certs in `src/crts/` are not used**; the client auto-upgrades `mqtt://` → `mqtts://` with a warning.
+- [ ] **`MQTT_URL`** uses **`mqtts://`** (TLS). **`mqtt://`** is plain TCP — **client certs are not used** until upgraded; the client auto-upgrades `mqtt://` → `mqtts://` with a warning.
 - [ ] **`MQTT_URL`** matches how you reach the broker:
   - **EMQX Dedicated** (example): `mqtts://<deployment>.ala.dedicated.aws.emqxcloud.com:8883`.
   - **Fly Mosquitto:** `mqtts://proof-mqtt.fly.dev:8883`.
@@ -17,11 +17,11 @@ Use this with `node src/client.js` / `npm start` and the current `src/client.js`
 - [ ] **`deploy/fly/broker-ca.crt`** for **self-hosted / Fly Mosquitto** (default path is skipped automatically for **`*.emqxcloud.com`** — those use the system CA store unless **`MQTT_BROKER_CA`** is set).
 - [ ] Set **`MQTT_BROKER_CA`** to the PEM that signs the **server** cert if it is not publicly trusted.
 - [ ] **`MQTT_BROKER_CA=`** (empty) forces system trust only.
-- [ ] Legacy / extra roots: **`USE_CUSTOM_CA=1`** merges system roots + `src/crts/root_certifacite.txt` (not a substitute for `broker-ca.crt` when the server is signed by your deploy CA).
+- [ ] Legacy / extra roots: **`USE_CUSTOM_CA=1`** merges system roots + device issuing CA PEM (`src/certs/ca.crt`, `root-ca.crt`, or legacy `root_certifacite.txt` in **`CRT_DIR`**). Not a substitute for **`broker-ca.crt`** when verifying the **server** cert.
 
 ## 3. Device identity (mTLS — broker must trust your client cert)
 
-- [ ] **`src/crts/`** contains the expected files (see `src/device_keys_from_header.js`):
+- [ ] **`src/certs/`** (or **`CRT_DIR`**) contains **`client.crt`** + **`client.key`**; optional **`broker-ca.crt`**, **`ca.crt`** / **`root-ca.crt`** for custom trust. Legacy filenames still supported — see `src/device_keys_from_header.js`:
   - `root_certifacite.txt` — device-side root material (optional for server trust path),
   - `device certificate CA signed.txt` — **client certificate PEM**,
   - `privatekey_protect.txt` — **client private key PEM**.
@@ -30,7 +30,7 @@ Use this with `node src/client.js` / `npm start` and the current `src/client.js`
 
 ## 4. MQTT application layer (default: none)
 
-- [ ] **Default:** **no** MQTT username or password — identity is **only** TLS client certificate + key from **`src/crts/`** (X.509 / mTLS). Configure **EMQX** for certificate-based authentication, not password auth, on this listener.
+- [ ] **Default:** **no** MQTT username or password — identity is **only** TLS client certificate + key from **`src/certs/`** (X.509 / mTLS). Configure **EMQX** for certificate-based authentication, not password auth, on this listener.
 - [ ] **Optional:** **`MQTT_PEER_CN_AS_MQTT_USERNAME=1`** — also send CONNECT **username = cert CN** (still no password) if your EMQX rule set expects it.
 - [ ] **Legacy password broker:** **`MQTT_USERNAME`** / **`MQTT_PASSWORD`**.
 
@@ -47,7 +47,7 @@ Use this with `node src/client.js` / `npm start` and the current `src/client.js`
 
 ```bash
 # From node-mqtt-client/
-openssl x509 -in "src/crts/device certificate CA signed.txt" -noout -subject -issuer
+openssl x509 -in src/certs/client.crt -noout -subject -issuer
 # Issuer CN must match a CA trusted by Mosquitto's cafile.
 
 # Run (example bore)
