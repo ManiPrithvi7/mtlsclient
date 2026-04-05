@@ -1,6 +1,10 @@
-# Node MQTT mTLS client (uses `main/device_keys.h`)
+# Node MQTT mTLS client
 
-This is a small Node.js MQTT client that reads the **same** certificates/keys from `main/device_keys.h` and connects using **mTLS**.
+Reference Node.js MQTT client using **TLS client certificate + key** (`mqtts://`), aligned with the same broker and topic contract as **statsmqtt** / firmware.
+
+## Documentation (start here)
+
+**[MQTT_CLIENT_IMPLEMENTATION_GUIDE.md](./MQTT_CLIENT_IMPLEMENTATION_GUIDE.md)** — single guide for operators, backend, and **firmware** (env vars, certs, EMQX / self-hosted / tunnels, topics, troubleshooting).
 
 ## Setup
 
@@ -11,7 +15,7 @@ npm install
 
 ## Run
 
-If **`Desktop/statsmqtt/.env`** exists, the client loads it automatically and fills empty **`MQTT_*`** fields (so a local `.env` with blank `MQTT_USERNAME=` still picks up `proof` from the server). You can override in **`node-mqtt-client/.env`**. Or set everything inline:
+If **`Desktop/statsmqtt/.env`** exists (relative to this package), the client loads it and can fill empty **`MQTT_*`** from there; **`node-mqtt-client/.env`** overrides.
 
 ```bash
 cp .env.example .env
@@ -23,9 +27,10 @@ npm start
 MQTT_URL="mqtts://your-broker.com:8883" npm start
 ```
 
-### Optional environment variables
+### PEM bundle
 
-- `DEVICE_KEYS_H`: path relative to repo root (default: `main/device_keys.h`)
-- `TOPIC_PREFIX`: default `statsnapp/<DEVICE_ID>`
-- `REG_TOPIC`: default `<TOPIC_PREFIX>/registration`
+Default: **`src/certs/client.crt`** + **`client.key`**; optional **`broker-ca.crt`**. See the implementation guide and **`src/certs/README.txt`**.
 
+### Optional (advanced)
+
+- **`USE_CRT_DIR=0`** + **`DEVICE_KEYS_H`**: load from ESP-style `device_keys.h` instead of `src/certs/`.
