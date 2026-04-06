@@ -21,6 +21,15 @@ function nonEmpty(s) {
   return typeof s === 'string' && s.trim().length > 0;
 }
 
+/** True if crtDir already has device material (legacy PEM names or client.crt + client.key). */
+function hasDeviceCertBundle(crtDir) {
+  const legacyCert = path.join(crtDir, 'device certificate CA signed.txt');
+  const clientCrt = path.join(crtDir, 'client.crt');
+  const clientKey = path.join(crtDir, 'client.key');
+  if (fs.existsSync(legacyCert)) return true;
+  return fs.existsSync(clientCrt) && fs.existsSync(clientKey);
+}
+
 /** Expand AggregateError / nested causes so logs show ECONNREFUSED, ETIMEDOUT, etc. */
 function formatConnectError(err) {
   if (!err) return String(err);
@@ -203,8 +212,7 @@ async function main() {
   const crtDir = env('CRT_DIR', path.resolve(__dirname, 'certs'));
 
   const useCrtDir = env('USE_CRT_DIR', '1') === '1';
-  const certPath = path.join(crtDir, 'device certificate CA signed.txt');
-  const needsProvisioning = useCrtDir && !fs.existsSync(certPath);
+  const needsProvisioning = useCrtDir && !hasDeviceCertBundle(crtDir);
 
   let deviceKeys;
   if (needsProvisioning) {
@@ -212,7 +220,7 @@ async function main() {
     deviceKeys = await provisionDevice(crtDir);
   } else if (useCrtDir) {
     console.log(
-      `[MQTT] Using existing certs in ${crtDir} (skip provisioning). Remove "device certificate CA signed.txt" to generate a new key/CSR and call sign-csr again.`,
+      `[MQTT] Using existing certs in ${crtDir} (skip provisioning). Remove device cert/key (e.g. "device certificate CA signed.txt" or client.crt + client.key) to provision again.`,
     );
     deviceKeys = loadDeviceKeysFromCrtFolder(crtDir);
   } else {
