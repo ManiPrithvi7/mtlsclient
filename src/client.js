@@ -5,7 +5,12 @@ const tls = require('node:tls');
 const mqtt = require('mqtt');
 const dotenv = require('dotenv');
 
-const { loadDeviceKeysFromHeader, loadDeviceKeysFromCrtFolder } = require('./device_keys_from_header');
+const {
+  loadDeviceKeysFromHeader,
+  loadDeviceKeysFromCrtFolder,
+  readFirstCertificatePemFromFile,
+} = require('./device_keys_from_header');
+const { provisionDevice } = require('./provisioning');
 const { caForBrokerTls } = require('./tlsBrokerCa');
 
 function env(name, fallback) {
@@ -75,7 +80,8 @@ function resolveTlsServername(mqttUrl) {
 
 /**
  * PEM for verifying the broker TLS server cert.
- * Priority: MQTT_BROKER_CA (path) → crtDir/broker-ca.crt (verbatim copy from statsmqtt data/ca, do not edit) → deploy/fly for non-EMQX hosts.
+ * Priority: MQTT_BROKER_CA (path) → crtDir/broker-ca.crt → crtDir/root_certifacite.txt (provisioning root CA)
+ * → deploy/fly for non-EMQX hosts.
  * Empty MQTT_BROKER_CA forces system trust only. caForBrokerTls() still merges this PEM with tls.rootCertificates.
  */
 function loadBrokerCaPem(repoRoot, mqttUrl, crtDir) {
@@ -99,6 +105,18 @@ function loadBrokerCaPem(repoRoot, mqttUrl, crtDir) {
   const bundledBrokerCa = path.join(crtDir, 'broker-ca.crt');
   if (fs.existsSync(bundledBrokerCa)) {
     return { pem: fs.readFileSync(bundledBrokerCa, 'utf8'), resolvedPath: bundledBrokerCa };
+  }
+
+  const provisionedRootPath = path.join(crtDir, 'root_certifacite.txt');
+  if (fs.existsSync(provisionedRootPath)) {
+    try {
+      const pem = readFirstCertificatePemFromFile(provisionedRootPath);
+      if (pem) {
+        return { pem, resolvedPath: provisionedRootPath };
+      }
+    } catch (e) {
+      console.warn(`[MQTT] could not read provisioning root CA from ${provisionedRootPath}: ${e.message}`);
+    }
   }
 
   const defaultFlyCa = !/\.emqxcloud\.com$/i.test(host);
@@ -175,7 +193,7 @@ function loadMergedEnv(pkgRoot) {
   }
 }
 
-function main() {
+async function main() {
   const pkgRoot = path.resolve(__dirname, '..');
   loadMergedEnv(pkgRoot);
 
@@ -185,9 +203,23 @@ function main() {
   const crtDir = env('CRT_DIR', path.resolve(__dirname, 'certs'));
 
   const useCrtDir = env('USE_CRT_DIR', '1') === '1';
-  const { deviceId, ca, cert, key } = useCrtDir
-    ? loadDeviceKeysFromCrtFolder(crtDir)
-    : loadDeviceKeysFromHeader(headerPath);
+  const certPath = path.join(crtDir, 'device certificate CA signed.txt');
+  const needsProvisioning = useCrtDir && !fs.existsSync(certPath);
+
+  let deviceKeys;
+  if (needsProvisioning) {
+    console.log('[MQTT] No device cert in crtDir — running provisioning (CSR + sign-csr)...');
+    deviceKeys = await provisionDevice(crtDir);
+  } else if (useCrtDir) {
+    console.log(
+      `[MQTT] Using existing certs in ${crtDir} (skip provisioning). Remove "device certificate CA signed.txt" to generate a new key/CSR and call sign-csr again.`,
+    );
+    deviceKeys = loadDeviceKeysFromCrtFolder(crtDir);
+  } else {
+    deviceKeys = loadDeviceKeysFromHeader(headerPath);
+  }
+
+  const { deviceId, ca, cert, key } = deviceKeys;
 
   // Self-hosted Mosquitto (bore tunnel): custom broker CA. Public brokers: omit MQTT_BROKER_CA and use system trust.
   const useCustomCa = env('USE_CUSTOM_CA', '0') === '1';
@@ -435,7 +467,10 @@ function main() {
     }
     if (/Bad username or password|Not authorized/i.test(msg)) {
       console.error(
-        '[MQTT] hint (connack 4/5): Broker rejected MQTT credentials. Most EMQX Cloud deployments: set MQTT_PEER_CN_AS_MQTT_USERNAME=0, then MQTT_USERNAME and MQTT_PASSWORD exactly as in the EMQX console (same as statsmqtt .env). If you use pure X.509 auth only, turn off built-in/password auth in EMQX or put X.509 first, then use no CONNECT user/pass and MQTT_PEER_CN_AS_MQTT_USERNAME=0.',
+        '[MQTT] hint (connack 4): Wrong MQTT username or password — set MQTT_USERNAME + MQTT_PASSWORD to match an EMQX user (Console → Authentication).',
+      );
+      console.error(
+        '[MQTT] hint (connack 5 "Not authorized"): Often no usable auth when CONNECT has no user/pass. Fix A: set MQTT_USERNAME and MQTT_PASSWORD in .env. Fix B: EMQX Console → Authentication → add **X.509** and upload the **same CA** that signed your device cert (src/crts), then connect with mqttAuth=no. With **peer cert as username=CN**, use MQTT_PEER_CN_AS_MQTT_USERNAME=1 and MQTT_PASSWORD if that user uses a password in EMQX.',
       );
     }
     // TLS alert 48: broker does not trust the **device** certificate issuer (opposite direction from broker-ca.crt).
@@ -464,10 +499,8 @@ function main() {
   });
 }
 
-try {
-  main();
-} catch (err) {
+main().catch((err) => {
   console.error(err instanceof Error ? err.message : err);
   process.exit(1);
-}
+});
 

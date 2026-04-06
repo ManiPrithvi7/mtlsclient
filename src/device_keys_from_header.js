@@ -2,11 +2,25 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
+/**
+ * Reverse of server CAService.formatExpectedCN() normalization: CERT_CN_PREFIX + separator
+ * stripped so topic/deviceId matches Mongo (e.g. PROOF-ADMIN-1 → ADMIN-1).
+ */
+function stripCnPrefix(cn) {
+  if (!cn || typeof cn !== 'string') return cn;
+  const rawPrefix = process.env.CERT_CN_PREFIX || 'PROOF';
+  const prefix = rawPrefix.trim().replace(/[-_]+$/g, '');
+  if (!prefix) return cn;
+  const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return cn.replace(new RegExp(`^${escaped}[-_]`), '');
+}
+
 function commonNameFromCertPem(certPem) {
   try {
     const x509 = new crypto.X509Certificate(certPem);
     const m = String(x509.subject).match(/CN\s*=\s*([^,\r\n]+)/i);
-    return m ? m[1].trim() : null;
+    const rawCn = m ? m[1].trim() : null;
+    return rawCn ? stripCnPrefix(rawCn) : null;
   } catch {
     return null;
   }
@@ -167,8 +181,20 @@ function loadDeviceKeysFromCrtFolder(crtDir) {
   return { deviceId, ca, cert, key };
 }
 
+/** First PEM certificate block from a file (e.g. provisioning root in root_certifacite.txt). */
+function readFirstCertificatePemFromFile(filePath) {
+  const text = fs.readFileSync(filePath, 'utf8');
+  return (
+    extractFirstPemBlock(text, '-----BEGIN CERTIFICATE-----\n') ||
+    extractFirstPemBlock(text, '-----BEGIN CERTIFICATE-----')
+  );
+}
+
 module.exports = {
   loadDeviceKeysFromHeader,
   loadDeviceKeysFromCrtFolder,
+  stripCnPrefix,
+  commonNameFromCertPem,
+  readFirstCertificatePemFromFile,
 };
 
