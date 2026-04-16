@@ -1,0 +1,8 @@
+{
+  "files.associations": {
+    "*.js": "javascript",
+    "*.cjs": "javascript",
+    "*.mjs": "javascript",
+    "*.json": "jsonc"
+  }
+}

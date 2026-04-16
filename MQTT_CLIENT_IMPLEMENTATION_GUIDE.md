@@ -58,7 +58,7 @@ Firmware: embed the equivalent settings in provisioning / secure storage (no mer
 | **`DEVICE_ID_OVERRIDE`** | Overrides **`clientId`** / topic device segment from cert CN. |
 | **`MQTT_TOPIC_ROOT`** | Default **`proof.mqtt`**. |
 | **`TOPIC_PREFIX`** | Default **`{MQTT_TOPIC_ROOT}/{deviceId}`**. |
-| **`SUBSCRIBE_ALL`** | Default **`1`** → subscribe to **`{prefix}/#`** plus named topics. |
+| **`SUBSCRIBE_ALL`** | Default **`1`** → **`{prefix}/#`** only. **`0`** → explicit list (`registration_ack`, `test-gmb`, `instagram`, …) — not both, to avoid duplicate deliveries. |
 | **`MQTT_KEEPALIVE`** | Default **60** (seconds). |
 | **`MQTT_IP_FAMILY`** | **`4`** / **`6`** / empty; bore defaults to IPv4 in client code. |
 | **`REG_TOPIC`** | Default **`{TOPIC_PREFIX}/active`**. |
@@ -124,7 +124,7 @@ Firmware: embed the equivalent settings in provisioning / secure storage (no mer
 - **LWT:** **`{prefix}/lwt`**
 - **Registration publish (Node default):** **`{prefix}/active`** (override **`REG_TOPIC`**).
 - **Status publish:** **`{prefix}/status`** (override **`STATUS_TOPIC`**).
-- **Subscriptions (defaults):** wildcard **`{prefix}/#`** when **`SUBSCRIBE_ALL=1`**, plus **`registration_ack`**, **`test-gmb`**, **`instagram`**, **`gmb`**, **`pos`**, **`promotion`** under **`{prefix}/…`**.
+- **Subscriptions (defaults):** **`SUBSCRIBE_ALL=1`** → only **`{prefix}/#`** (covers all subtopics). **`SUBSCRIBE_ALL=0`** → only the explicit topic list — **not** wildcard + explicit (avoids double message delivery on many brokers).
 
 Firmware should subscribe/publish to the **same** paths your backend expects.
 

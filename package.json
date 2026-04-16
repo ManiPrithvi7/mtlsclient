@@ -4,13 +4,16 @@
   "private": true,
   "description": "Node.js MQTT mTLS client using ESP-IDF device_keys.h",
   "type": "commonjs",
-  "main": "src/client.js",
+  "main": "src/index.js",
   "scripts": {
     "start": "node src/client.js",
-    "lint:noop": "node -c src/client.js && node -c src/device_keys_from_header.js && node -c src/provisioning.js"
+    "dev": "node src/index.js",
+    "control": "node src/index.js",
+    "lint:noop": "node -c src/client.js && node -c src/index.js && node -c src/config.js && node -c src/mqttClient.js && node -c src/certificateStore.js && node -c src/stateMachine.js && node -c src/renewal.js && node -c src/recovery.js && node -c src/webControlPanel.js && node -c src/device_keys_from_header.js && node -c src/provisioning.js"
   },
   "dependencies": {
     "dotenv": "^17.3.1",
+    "express": "^5.2.1",
     "mqtt": "^5.14.1",
     "node-forge": "^1.3.1"
   }

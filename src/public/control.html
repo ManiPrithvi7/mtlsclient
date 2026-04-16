@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Device Control Panel</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: linear-gradient(135deg, #0f172a, #1e293b);
+      color: #0f172a;
+      min-height: 100vh;
+      padding: 24px;
+    }
+    .container { max-width: 1100px; margin: 0 auto; }
+    .header { color: #fff; margin-bottom: 24px; }
+    .card {
+      background: #fff;
+      border-radius: 16px;
+      padding: 20px;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.25);
+      margin-bottom: 20px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+    }
+    .metric {
+      background: #f8fafc;
+      border-radius: 12px;
+      padding: 14px;
+    }
+    .metric-label {
+      font-size: 12px;
+      text-transform: uppercase;
+      color: #64748b;
+      margin-bottom: 6px;
+    }
+    .metric-value { font-weight: 700; font-size: 18px; word-break: break-word; }
+    .metric-subtext { font-size: 12px; color: #64748b; margin-top: 4px; }
+    .actions {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 16px;
+    }
+    .action {
+      border-top: 4px solid #3b82f6;
+      background: #fff;
+      border-radius: 16px;
+      padding: 18px;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.18);
+    }
+    .action.danger { border-top-color: #ef4444; }
+    .action.warning { border-top-color: #f59e0b; }
+    .action.success { border-top-color: #22c55e; }
+    .action h3 { margin-top: 0; }
+    button {
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-weight: 600;
+      cursor: pointer;
+      background: #e2e8f0;
+    }
+    button.primary { background: #3b82f6; color: #fff; }
+    button.danger { background: #ef4444; color: #fff; }
+    button.success { background: #16a34a; color: #fff; }
+    button:disabled { opacity: 0.6; cursor: wait; }
+    input {
+      width: 100%;
+      margin-top: 8px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid #cbd5e1;
+    }
+    label {
+      display: block;
+      margin-top: 12px;
+      font-size: 14px;
+      font-weight: 600;
+      color: #334155;
+    }
+    .hint {
+      margin-top: 10px;
+      font-size: 13px;
+      color: #64748b;
+    }
+    .log {
+      background: #020617;
+      color: #cbd5e1;
+      border-radius: 12px;
+      padding: 16px;
+      min-height: 220px;
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      overflow: auto;
+    }
+    .log-entry { margin-bottom: 8px; }
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(2, 6, 23, 0.65);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .modal-backdrop.open { display: flex; }
+    .modal {
+      width: min(520px, 100%);
+      background: #fff;
+      border-radius: 16px;
+      padding: 22px;
+      box-shadow: 0 20px 40px rgba(15, 23, 42, 0.35);
+    }
+    .modal-actions {
+      display: flex;
+      gap: 12px;
+      margin-top: 18px;
+    }
+    .modal-actions button {
+      flex: 1;
+    }
+    .status-banner {
+      display: none;
+      margin-bottom: 16px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      font-size: 14px;
+    }
+    .status-banner.open { display: block; }
+    .status-banner.error { background: #fee2e2; color: #991b1b; }
+    .status-banner.success { background: #dcfce7; color: #166534; }
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .checkbox-row input {
+      width: auto;
+      margin: 0;
+    }
+    .inline-actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 16px;
+    }
+    .inline-actions button {
+      flex: 1;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Device Control Panel</h1>
+      <p>Trigger lifecycle events and inspect local certificate state.</p>
+    </div>
+
+    <div class="card">
+      <h2>Status</h2>
+      <div class="grid">
+        <div class="metric"><div class="metric-label">Device ID</div><div class="metric-value" id="deviceId">-</div></div>
+        <div class="metric"><div class="metric-label">State</div><div class="metric-value" id="deviceState">-</div></div>
+        <div class="metric"><div class="metric-label">Certificate</div><div class="metric-value" id="certStatus">-</div></div>
+        <div class="metric"><div class="metric-label">Days Remaining</div><div class="metric-value" id="daysRemaining">-</div></div>
+        <div class="metric"><div class="metric-label">Integrity</div><div class="metric-value" id="integrityStatus">-</div></div>
+        <div class="metric">
+          <div class="metric-label">MQTT URL</div>
+          <div class="metric-value" id="mqttUrl">-</div>
+          <div class="metric-subtext" id="backendMode">-</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="actions">
+      <div class="action danger">
+        <h3>Factory Reset</h3>
+        <p>Clear slot-based certificates and return to recovery mode.</p>
+        <button class="danger" onclick="callAction('/api/action/factory-reset', {}, 'Factory reset')">Reset Device</button>
+      </div>
+
+      <div class="action warning">
+        <h3>WiFi Reset</h3>
+        <p>Collect new SSID and password, then save updated WiFi credentials.</p>
+        <button onclick="openWifiModal()">Reset WiFi</button>
+      </div>
+
+      <div class="action">
+        <h3>Force Renewal</h3>
+        <p>Manually run the certificate renewal flow.</p>
+        <button class="primary" onclick="callAction('/api/action/renew', {}, 'Renewal')">Renew Now</button>
+      </div>
+
+      <div class="action">
+        <h3>Certificate Reissue</h3>
+        <p>Recover device identity using a dashboard token with clear JSON errors.</p>
+        <button class="primary" onclick="openReissueModal()">Open Reissue Flow</button>
+      </div>
+
+      <div class="action success">
+        <h3>Full Recovery</h3>
+        <p>Configure WiFi and reissue a certificate in one combined flow.</p>
+        <button class="success" onclick="openFullRecoveryModal()">Start Full Recovery</button>
+      </div>
+
+      <div class="action">
+        <h3>Test MQTT</h3>
+        <p>Verify the current certificate can authenticate to the broker.</p>
+        <button onclick="callAction('/api/action/test-mqtt', {}, 'MQTT test')">Run Test</button>
+      </div>
+
+      <div class="action">
+        <h3>Refresh</h3>
+        <p>Reload live status from the local simulator.</p>
+        <button onclick="refreshStatus()">Refresh Status</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Event Log</h2>
+      <div id="log" class="log"></div>
+    </div>
+  </div>
+
+  <div id="modalBackdrop" class="modal-backdrop" onclick="closeModalOnBackdrop(event)">
+    <div class="modal">
+      <h2 id="modalTitle">Action</h2>
+      <div id="modalBanner" class="status-banner"></div>
+      <div id="modalBody"></div>
+      <div class="modal-actions">
+        <button onclick="closeModal()">Cancel</button>
+        <button id="modalSubmit" class="primary" onclick="submitActiveModal()">Submit</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let latestStatus = null;
+    let activeModal = null;
+
+    function addLog(message) {
+      const log = document.getElementById('log');
+      const item = document.createElement('div');
+      item.className = 'log-entry';
+      item.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+      log.appendChild(item);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function setModalBanner(message, type) {
+      const banner = document.getElementById('modalBanner');
+      if (!message) {
+        banner.className = 'status-banner';
+        banner.textContent = '';
+        return;
+      }
+      banner.className = `status-banner open ${type}`;
+      banner.textContent = message;
+    }
+
+    function openModal(title, bodyHtml, submitLabel, submitClass, modalName) {
+      activeModal = modalName;
+      document.getElementById('modalTitle').textContent = title;
+      document.getElementById('modalBody').innerHTML = bodyHtml;
+      const submitButton = document.getElementById('modalSubmit');
+      submitButton.textContent = submitLabel;
+      submitButton.className = submitClass || 'primary';
+      setModalBanner('', '');
+      document.getElementById('modalBackdrop').classList.add('open');
+    }
+
+    function closeModal() {
+      activeModal = null;
+      document.getElementById('modalBackdrop').classList.remove('open');
+      setModalBanner('', '');
+    }
+
+    function closeModalOnBackdrop(event) {
+      if (event.target.id === 'modalBackdrop') {
+        closeModal();
+      }
+    }
+
+    function setSubmitDisabled(disabled) {
+      document.getElementById('modalSubmit').disabled = disabled;
+    }
+
+    async function refreshStatus() {
+      const response = await fetch('/api/status');
+      const status = await response.json();
+      latestStatus = status;
+      document.getElementById('deviceId').textContent = status.device.id;
+      document.getElementById('deviceState').textContent = status.device.state;
+      document.getElementById('mqttUrl').textContent = status.config.mqttUrl || 'Not configured';
+      document.getElementById('backendMode').textContent = 'Live backend mode';
+
+      if (status.certificates.certInfo) {
+        document.getElementById('certStatus').textContent = status.certificates.certInfo.isValid ? 'Valid' : 'Expired';
+        document.getElementById('daysRemaining').textContent = status.certificates.certInfo.daysRemaining;
+      } else {
+        document.getElementById('certStatus').textContent = 'No certificate';
+        document.getElementById('daysRemaining').textContent = 'N/A';
+      }
+
+      document.getElementById('integrityStatus').textContent = status.certificates.integrityOk ? 'Valid' : 'Invalid';
+      addLog('Status refreshed');
+    }
+
+    async function parseApiResponse(response) {
+      const text = await response.text();
+      let payload = null;
+
+      try {
+        payload = text ? JSON.parse(text) : {};
+      } catch (error) {
+        console.error('Non-JSON response:', text);
+        payload = {
+          success: false,
+          error: text || 'Non-JSON response returned by server',
+          code: 'INVALID_RESPONSE',
+        };
+      }
+
+      if (!response.ok) {
+        const message = payload.error || `Request failed with status ${response.status}`;
+        const err = new Error(message);
+        err.status = response.status;
+        err.payload = payload;
+        throw err;
+      }
+
+      return payload;
+    }
+
+    async function callAction(url, body, label) {
+      addLog(`${label} started`);
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const result = await parseApiResponse(response);
+        addLog(`${label}: ${result.message || 'Success'}`);
+        await refreshStatus();
+        return result;
+      } catch (error) {
+        console.error(`${label} failed`, error);
+        addLog(`${label} failed: ${error.payload?.error || error.message}`);
+        throw error;
+      }
+    }
+
+    function openWifiModal() {
+      openModal(
+        'WiFi Reset',
+        `
+          <label for="wifiSsid">SSID</label>
+          <input id="wifiSsid" placeholder="Enter WiFi SSID">
+          <label for="wifiPassword">Password</label>
+          <input id="wifiPassword" type="password" placeholder="Enter WiFi password">
+          <div class="inline-actions">
+            <button type="button" onclick="testWifiConnection()">Test Connection</button>
+            <button type="button" class="primary" onclick="submitActiveModal()">Save & Connect</button>
+          </div>
+          <div id="wifiTestResult" class="hint"></div>
+          <p class="hint">Save new WiFi credentials locally. If the device has no certificate, you can continue to reissue afterwards.</p>
+        `,
+        'Save WiFi',
+        'primary',
+        'wifi'
+      );
+    }
+
+    function openReissueModal() {
+      const deviceId = latestStatus?.device?.id && latestStatus.device.id !== 'NOT_PROVISIONED'
+        ? latestStatus.device.id
+        : '';
+
+      openModal(
+        'Certificate Reissue',
+        `
+          <label for="reissueDeviceId">Device ID</label>
+          <input id="reissueDeviceId" value="${deviceId}" placeholder="e.g. ESP32-ABC123">
+          <label for="reissueToken">Authentication Token</label>
+          <input id="reissueToken" placeholder="Paste token from dashboard">
+          <label class="checkbox-row"><input id="reissueIncludeWifi" type="checkbox"> Include WiFi in same flow</label>
+          <p class="hint">Backend errors are shown as JSON messages when possible. Raw upstream errors are logged to the console.</p>
+        `,
+        'Run Reissue',
+        'primary',
+        'reissue'
+      );
+    }
+
+    function openFullRecoveryModal() {
+      const deviceId = latestStatus?.device?.id && latestStatus.device.id !== 'NOT_PROVISIONED'
+        ? latestStatus.device.id
+        : '';
+
+      openModal(
+        'Full Recovery',
+        `
+          <label for="fullWifiSsid">SSID</label>
+          <input id="fullWifiSsid" placeholder="Enter WiFi SSID">
+          <label for="fullWifiPassword">Password</label>
+          <input id="fullWifiPassword" type="password" placeholder="Enter WiFi password">
+          <label for="fullDeviceId">Device ID</label>
+          <input id="fullDeviceId" value="${deviceId}" placeholder="e.g. ESP32-ABC123">
+          <label for="fullAuthToken">Authentication Token</label>
+          <input id="fullAuthToken" placeholder="Paste token from dashboard">
+        `,
+        'Run Full Recovery',
+        'success',
+        'full-recovery'
+      );
+    }
+
+    function formatApiError(error) {
+      const payload = error.payload || {};
+      if (error.status === 401) return 'Invalid token';
+      if (error.status === 403) return 'Device not owned by user';
+      if (error.status === 429) return `Too many attempts${payload.retryAfter ? `. Retry after ${payload.retryAfter}s` : ''}`;
+      return payload.error || error.message || 'Unknown error';
+    }
+
+    async function submitActiveModal() {
+      if (!activeModal) return;
+      setSubmitDisabled(true);
+      setModalBanner('Submitting...', 'success');
+
+      try {
+        if (activeModal === 'wifi') {
+          const ssid = document.getElementById('wifiSsid').value.trim();
+          const password = document.getElementById('wifiPassword').value.trim();
+          const result = await callAction('/api/action/wifi-connect', { ssid, password }, 'WiFi connect');
+          setModalBanner(result.needsReissue ? 'WiFi saved. Device still needs certificate reissue.' : 'WiFi saved successfully.', 'success');
+          if (result.needsReissue) {
+            addLog('WiFi configured. Proceed to certificate reissue next.');
+          }
+          return;
+        }
+
+        if (activeModal === 'reissue') {
+          const includeWifi = document.getElementById('reissueIncludeWifi').checked;
+          if (includeWifi) {
+            openFullRecoveryModal();
+            return;
+          }
+          const deviceId = document.getElementById('reissueDeviceId').value.trim();
+          const authToken = document.getElementById('reissueToken').value.trim();
+          const result = await callAction('/api/action/reissue', { deviceId, authToken }, 'Reissue');
+          setModalBanner(`Reissue complete. New cert expiry: ${result.newCertExpiry || 'unknown'}`, 'success');
+          return;
+        }
+
+        if (activeModal === 'full-recovery') {
+          const body = {
+            ssid: document.getElementById('fullWifiSsid').value.trim(),
+            password: document.getElementById('fullWifiPassword').value.trim(),
+            deviceId: document.getElementById('fullDeviceId').value.trim(),
+            authToken: document.getElementById('fullAuthToken').value.trim(),
+          };
+          const result = await callAction('/api/action/full-recovery', body, 'Full recovery');
+          setModalBanner(`Full recovery complete. New cert expiry: ${result.newCertExpiry || 'unknown'}`, 'success');
+          return;
+        }
+      } catch (error) {
+        console.error('Modal submit failed', error);
+        setModalBanner(formatApiError(error), 'error');
+      } finally {
+        setSubmitDisabled(false);
+      }
+    }
+
+    async function testWifiConnection() {
+      const ssid = document.getElementById('wifiSsid')?.value.trim();
+      const password = document.getElementById('wifiPassword')?.value.trim();
+      const resultNode = document.getElementById('wifiTestResult');
+      if (!resultNode) return;
+
+      resultNode.textContent = 'Testing WiFi connection...';
+
+      try {
+        const result = await callAction('/api/action/wifi-test', { ssid, password }, 'WiFi test');
+        resultNode.textContent = `Connection successful. Signal: ${result.signal || 'good'}`;
+      } catch (error) {
+        resultNode.textContent = formatApiError(error);
+      }
+    }
+
+    refreshStatus();
+    setInterval(refreshStatus, 5000);
+  </script>
+</body>
+</html>
