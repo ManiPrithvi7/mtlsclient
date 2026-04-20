@@ -3,8 +3,10 @@ const fs = require('node:fs/promises');
 const express = require('express');
 
 const { RenewalFlow } = require('./renewal');
-const { RecoveryFlow } = require('./recovery');
+const { ReissueFlow } = require('./reissue');
 const { testMqttConnection } = require('./mqttClient');
+const { requestJson, extractCertificatePayload } = require('./renewal');
+const { writeCertFiles } = require('./provisioning_write');
 
 class WebControlPanel {
   constructor(config, store, stateMachine) {
@@ -24,6 +26,25 @@ class WebControlPanel {
       res.sendFile(path.join(__dirname, 'public', 'control.html'));
     });
 
+    // Recovery portal (not linked from main UI)
+    this.app.get('/recovery', (req, res) => {
+      const code = typeof req.query.code === 'string' ? req.query.code : '';
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.send(this.renderRecoveryPortalHtml(code));
+    });
+
+    this.app.get('/api/wifi/scan', async (_req, res) => {
+      // PC simulator: return mock scan results (real WiFi scanning is OS-specific).
+      res.json([
+        { ssid: 'Home WiFi', signal: 85, secured: true },
+        { ssid: 'Coffee Shop', signal: 72, secured: true },
+        { ssid: 'Office Guest', signal: 45, secured: false },
+      ]);
+    });
+
+    // Recovery portal submit: server performs backend call + local persistence.
+    this.app.post('/api/recovery/restore', this.handleRecoveryPortalRestore.bind(this));
+
     this.app.post('/api/action/factory-reset', this.handleFactoryReset.bind(this));
     this.app.post('/api/action/wifi-reset', this.handleWifiReset.bind(this));
     this.app.post('/api/action/wifi-test', this.handleWifiTest.bind(this));
@@ -34,6 +55,149 @@ class WebControlPanel {
     this.app.post('/api/action/test-mqtt', this.handleTestMqtt.bind(this));
     this.app.get('/api/status', this.handleStatus.bind(this));
     this.app.get('/api/cert-info', this.handleCertInfo.bind(this));
+  }
+
+  renderRecoveryPortalHtml(code) {
+    const safeCode = String(code || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Device Recovery Portal</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; max-width: 720px; margin: 0 auto; padding: 24px; }
+    .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 14px; padding: 18px; margin-bottom: 16px; }
+    .code { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 36px; letter-spacing: 6px; text-align: center; padding: 14px; background: #f3f4f6; border-radius: 12px; }
+    label { display: block; margin-top: 12px; font-weight: 700; }
+    input, select { width: 100%; padding: 12px; border-radius: 10px; border: 1px solid #d1d5db; margin-top: 6px; }
+    button { width: 100%; margin-top: 16px; padding: 12px; border: 0; border-radius: 10px; background: #2563eb; color: white; font-weight: 700; cursor: pointer; }
+    button:disabled { opacity: 0.6; cursor: wait; }
+    .status { margin-top: 12px; padding: 12px; border-radius: 10px; }
+    .ok { background: #dcfce7; color: #166534; }
+    .bad { background: #fee2e2; color: #991b1b; }
+    .hint { color: #6b7280; font-size: 13px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Device Recovery Portal</h1>
+
+  <div class="card">
+    <div class="hint">Open this page with <code>?code=RECOVERY_CODE</code> from the dashboard.</div>
+    <div class="code" id="codeDisplay">${safeCode || '------'}</div>
+  </div>
+
+  <div class="card">
+    <label for="ssidSelect">WiFi SSID</label>
+    <select id="ssidSelect"><option value="">Scanning...</option></select>
+
+    <label for="wifiPassword">WiFi Password</label>
+    <input id="wifiPassword" type="password" placeholder="Enter WiFi password">
+
+    <label for="recoveryCode">Recovery Code</label>
+    <input id="recoveryCode" placeholder="e.g. 552109" value="${safeCode}">
+
+    <button id="restoreBtn">Restore Device</button>
+    <div id="status" class="status" style="display:none;"></div>
+  </div>
+
+  <script>
+    const backendUrl = ${JSON.stringify(this.config.backendUrl || '')};
+
+    async function scan() {
+      const res = await fetch('/api/wifi/scan');
+      const list = await res.json();
+      const sel = document.getElementById('ssidSelect');
+      sel.innerHTML = '<option value=\"\">Select a network...</option>' + list.map(n => \`<option value=\"\${n.ssid}\">\${n.ssid} (\${n.signal}%)</option>\`).join('');
+    }
+    scan();
+
+    function setStatus(text, ok) {
+      const node = document.getElementById('status');
+      node.style.display = 'block';
+      node.className = 'status ' + (ok ? 'ok' : 'bad');
+      node.textContent = text;
+    }
+
+    document.getElementById('restoreBtn').onclick = async () => {
+      const ssid = document.getElementById('ssidSelect').value;
+      const password = document.getElementById('wifiPassword').value;
+      const recoveryCode = document.getElementById('recoveryCode').value.replace(/\s+/g, '');
+      const btn = document.getElementById('restoreBtn');
+      btn.disabled = true;
+      setStatus('Submitting recovery...', true);
+
+      try {
+        if (!backendUrl) throw new Error('BACKEND_URL is not configured on the local simulator');
+        const res = await fetch('/api/recovery/restore', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ssid, password, recoveryCode })
+        });
+        const text = await res.text();
+        let payload = null;
+        try { payload = text ? JSON.parse(text) : {}; } catch { payload = { success:false, error: text || 'Non-JSON response' }; }
+        if (!res.ok) throw new Error(payload.error || ('HTTP ' + res.status));
+        setStatus(payload.message || 'Recovery complete. You can close this tab.', true);
+      } catch (e) {
+        setStatus(e && e.message ? e.message : String(e), false);
+        btn.disabled = false;
+      }
+    };
+  </script>
+</body>
+</html>`;
+  }
+
+  async handleRecoveryPortalRestore(req, res) {
+    const { ssid, password, recoveryCode } = req.body || {};
+    if (!ssid || !password || !recoveryCode) {
+      this.sendJsonError(res, 400, 'ssid, password, and recoveryCode are required', 'VALIDATION_ERROR');
+      return;
+    }
+
+    try {
+      await this.attemptWifiConnection(ssid, password);
+      await this.saveWifiCredentials(ssid, password);
+
+      if (!this.config.backendUrl) {
+        this.sendJsonError(res, 400, 'BACKEND_URL is not configured', 'BACKEND_URL_MISSING');
+        return;
+      }
+
+      // Generate local keypair + CSR; keep private key in staging until cert arrives.
+      const deviceId = process.env.DEVICE_ID || 'DEVICE';
+      const { generateKeyAndCsr } = require('./provisioning');
+      const { csrPem, keyPem } = generateKeyAndCsr(deviceId, process.env.CERT_CN_PREFIX || 'PROOF');
+      await this.store.saveStaging(null, keyPem);
+
+      // Call backend to sign CSR using recovery_code
+      const reissueResponse = await requestJson(
+        new URL('/api/v1/certificates/reissue', this.config.backendUrl).toString(),
+        'POST',
+        { device_id: deviceId, csr: csrPem, recovery_code: String(recoveryCode).replace(/\s+/g, '') },
+      );
+
+      const issuedCert = extractCertificatePayload(reissueResponse);
+      const root =
+        reissueResponse && reissueResponse.data && typeof reissueResponse.data === 'object' && !Array.isArray(reissueResponse.data)
+          ? reissueResponse.data
+          : reissueResponse;
+      const caCertificate = root.ca_certificate || root.caCertificate || root.rootCa || root.ca;
+      if (typeof caCertificate !== 'string' || !caCertificate.includes('BEGIN CERTIFICATE')) {
+        throw new Error('Backend did not return ca_certificate PEM');
+      }
+
+      // Persist exactly like provisioning does
+      writeCertFiles(this.config.crtDir, { deviceCert: issuedCert, rootCa: caCertificate.trim(), keyPem });
+      await this.store.initialize();
+
+      if (this.stateMachine) await this.stateMachine.runAudit();
+      res.json({ success: true, message: 'Recovery complete. Certificate installed; device will reconnect shortly.' });
+    } catch (error) {
+      const mapped = this.mapBackendError(error);
+      this.sendJsonError(res, mapped.status, mapped.error, mapped.code, mapped.retryAfter ? { retryAfter: mapped.retryAfter } : {});
+    }
   }
 
   async start() {
@@ -154,7 +318,7 @@ class WebControlPanel {
       }
       res.json({
         success: true,
-        message: 'Factory reset complete. Device is now awaiting reprovisioning.',
+        message: 'Factory reset complete. Device is now awaiting recovery/provisioning.',
       });
     } catch (error) {
       res.status(500).json({ success: false, error: error.message });
@@ -237,15 +401,15 @@ class WebControlPanel {
   }
 
   async handleReissue(req, res) {
-    const { authToken, deviceId } = req.body || {};
-    if (!authToken || !deviceId) {
-      this.sendJsonError(res, 400, 'authToken and deviceId required', 'VALIDATION_ERROR');
+    const { recoveryCode, deviceId } = req.body || {};
+    if (!recoveryCode || !deviceId) {
+      this.sendJsonError(res, 400, 'recoveryCode and deviceId required', 'VALIDATION_ERROR');
       return;
     }
 
     try {
-      const recovery = new RecoveryFlow(this.config, this.store);
-      await recovery.run(authToken, deviceId);
+      const reissue = new ReissueFlow(this.config, this.store);
+      await reissue.run(recoveryCode, deviceId);
       if (this.stateMachine) await this.stateMachine.runAudit();
       const certInfo = await this.store.getCertificateInfo();
       res.json({
@@ -260,17 +424,17 @@ class WebControlPanel {
   }
 
   async handleFullRecovery(req, res) {
-    const { ssid, password, authToken, deviceId } = req.body || {};
-    if (!ssid || !password || !authToken || !deviceId) {
-      this.sendJsonError(res, 400, 'ssid, password, authToken and deviceId are required', 'VALIDATION_ERROR');
+    const { ssid, password, recoveryCode, deviceId } = req.body || {};
+    if (!ssid || !password || !recoveryCode || !deviceId) {
+      this.sendJsonError(res, 400, 'ssid, password, recoveryCode and deviceId are required', 'VALIDATION_ERROR');
       return;
     }
 
     try {
       const wifi = await this.attemptWifiConnection(ssid, password);
       await this.saveWifiCredentials(ssid, password);
-      const recovery = new RecoveryFlow(this.config, this.store);
-      await recovery.run(authToken, deviceId);
+      const reissue = new ReissueFlow(this.config, this.store);
+      await reissue.run(recoveryCode, deviceId);
 
       if (this.stateMachine) {
         await this.stateMachine.runAudit();

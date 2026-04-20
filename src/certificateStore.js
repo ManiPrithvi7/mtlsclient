@@ -56,8 +56,12 @@ class CertificateStore {
     try {
       const metadata = JSON.parse(await fsp.readFile(this.paths.metadata, 'utf8'));
       if (metadata.migrated) {
-        this.migrated = true;
-        return;
+        // Metadata can become stale after a factory reset that clears slot files but leaves metadata.
+        // Only trust it if primary still exists.
+        if (await this.hasPrimary()) {
+          this.migrated = true;
+          return;
+        }
       }
     } catch {
       // metadata absent or invalid, continue
@@ -192,6 +196,7 @@ class CertificateStore {
       fsp.unlink(this.paths.primary.cert),
       fsp.unlink(this.paths.primary.key),
       fsp.unlink(this.paths.integrity),
+      fsp.unlink(this.paths.metadata),
     ]);
     await this.clearStaging();
     console.log('[CERT-STORE] All certificates cleared (factory reset)');
