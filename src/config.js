@@ -113,6 +113,12 @@ function loadRuntimeConfig() {
     ? String(env('MQTT_TLS_VERIFY_HOST', '')).trim()
     : tlsServername;
 
+  const recoveryMode =
+    env('RECOVERY_MODE', '0') === '1' || String(env('RECOVERY_MODE', '')).toLowerCase() === 'true';
+  const recoveryCode =
+    recoveryMode && nonEmpty(env('RECOVERY_CODE', '')) ? String(env('RECOVERY_CODE', '')).trim() : '';
+  const deviceId = nonEmpty(env('DEVICE_ID', '')) ? String(env('DEVICE_ID', '')).trim() : '';
+
   return {
     pkgRoot,
     repoRoot,
@@ -138,6 +144,9 @@ function loadRuntimeConfig() {
     keepalive: Number(env('MQTT_KEEPALIVE', '60')) || 60,
     subscribeAll: env('SUBSCRIBE_ALL', '1') === '1',
     ipFamilyEnv: process.env.MQTT_IP_FAMILY,
+    recoveryMode,
+    recoveryCode,
+    deviceId,
   };
 }
 

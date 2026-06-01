@@ -194,4 +194,4 @@ main "$@"
 # defaults: 500 attempts max, no notify
 # ./poll_a1_hyderabad.sh
 # # run until success (no attempt ceiling)
-# MAX_ATTEMPTS=0 ./poll_a1_hyderabad.sh
+# MAX_ATTEMPTS=0 ./poll_a1_hyderabad.sha

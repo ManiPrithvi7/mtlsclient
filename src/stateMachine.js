@@ -1,5 +1,6 @@
 const { MqttRuntimeClient } = require('./mqttClient');
 const { RenewalFlow } = require('./renewal');
+const { ReissueFlow } = require('./reissue');
 
 class DeviceStateMachine {
   constructor(config, store) {
@@ -19,6 +20,9 @@ class DeviceStateMachine {
     if (!(await this.store.hasPrimary())) {
       this.currentState = 'RECOVERY_MODE';
       console.warn('[STATE] No primary certificate available. Waiting for recovery or provisioning.');
+      if (this.config.recoveryMode) {
+        await this.enterRecovery();
+      }
       return;
     }
 
@@ -26,6 +30,9 @@ class DeviceStateMachine {
     if (!integrityOk) {
       this.currentState = 'RECOVERY_MODE';
       console.warn('[STATE] Integrity check failed. Waiting for manual recovery.');
+      if (this.config.recoveryMode) {
+        await this.enterRecovery();
+      }
       return;
     }
 
@@ -33,6 +40,9 @@ class DeviceStateMachine {
     if (!certInfo?.isValid) {
       this.currentState = 'RECOVERY_MODE';
       console.warn('[STATE] Certificate is missing or expired. Waiting for manual recovery.');
+      if (this.config.recoveryMode) {
+        await this.enterRecovery();
+      }
       return;
     }
 
@@ -70,6 +80,32 @@ class DeviceStateMachine {
     } catch (error) {
       this.currentState = 'OPERATIONAL_DEGRADED';
       console.error(`[STATE] Renewal failed: ${error.message}`);
+    }
+  }
+
+  async enterRecovery() {
+    if (!this.config.backendUrl) {
+      console.error('[STATE] Auto reissue skipped: BACKEND_URL (or PROVISIONING_SERVER_URL) is not configured.');
+      return;
+    }
+    if (!this.config.recoveryCode) {
+      console.error('[STATE] Auto reissue skipped: RECOVERY_CODE is not set.');
+      return;
+    }
+    if (!this.config.deviceId) {
+      console.error('[STATE] Auto reissue skipped: DEVICE_ID is not set.');
+      return;
+    }
+
+    console.log('[STATE] Starting automatic certificate reissue.');
+    try {
+      const reissue = new ReissueFlow(this.config, this.store);
+      await reissue.run(this.config.recoveryCode, this.config.deviceId);
+      console.log('[STATE] Reissue succeeded. Re-running audit.');
+      await this.runAudit();
+    } catch (error) {
+      this.currentState = 'RECOVERY_MODE';
+      console.error(`[STATE] Reissue failed: ${error.message}`);
     }
   }
 

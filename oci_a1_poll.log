@@ -1,0 +1,24 @@
+
+[2026-05-06 10:51:40 +0530] attempt 1 placement=auto
+ERROR: This CLI session has expired, so it cannot currently be used to run commands
+Do you want to re-authenticate your CLI session profile? [Y/n]: Abort: 
+  -> auth/session expired — run: oci session authenticate (same profile).
+
+[2026-05-06 10:53:36 +0530] attempt 1 placement=auto
+
+[2026-05-06 10:54:56 +0530] attempt 1 placement=auto
+ServiceError:
+{
+    "client_version": "Oracle-PythonSDK/2.164.0, Oracle-PythonCLI/3.71.0",
+    "code": "InternalError",
+    "logging_tips": "Please run the OCI CLI command using --debug flag to find more debug information.",
+    "message": "Out of host capacity.",
+    "opc-request-id": "CD4E55349F1346EAA10D859F979F1B4C/99B01916B390271808D1FA6948594425/F10D02AA63C7260CD8EE189AC827FDD7",
+    "operation_name": "launch_instance",
+    "request_endpoint": "POST https://iaas.ap-hyderabad-1.oraclecloud.com/20160918/instances",
+    "status": 500,
+    "target_service": "compute",
+    "timestamp": "2026-05-06T05:26:33.250415+00:00",
+    "troubleshooting_tips": "See [https://docs.oracle.com/iaas/Content/API/References/apierrors.htm] for more information about resolving this error. If you are unable to resolve this issue, run this CLI command with --debug option and contact Oracle support and provide them the full error message."
+}
+  -> no A1 capacity; sleeping 300s

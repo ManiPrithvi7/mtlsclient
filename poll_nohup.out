@@ -1,0 +1,6 @@
+SSH metadata written (97 chars) -> /tmp/oci_instance_meta.json
+Logging to /home/statsnapp/Desktop/mtls_client/mtlsclient/oci_a1_poll.log
+Profile=DEFAULT AD=QfWX:AP-HYDERABAD-1-AD-1 MAX_ATTEMPTS=500
+
+[2026-05-06 10:51:40 +0530] attempt 1 placement=auto
+  -> auth/session expired — run: oci session authenticate (same profile).
