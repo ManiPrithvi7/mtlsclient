@@ -32,6 +32,7 @@ class CertificateStore {
       metadata: path.join(this.config.crtDir, '.metadata.json'),
     };
     this.migrated = false;
+    this.brokerCaPemCache = null;
   }
 
   async initialize() {
@@ -255,12 +256,35 @@ class CertificateStore {
     return info?.deviceId || null;
   }
 
+  async writeBrokerCaPem(caPem) {
+    const trimmed = String(caPem).trim();
+    const targetPath = path.join(this.config.crtDir, 'broker-ca.crt');
+    await fsp.mkdir(this.config.crtDir, { recursive: true });
+    await fsp.writeFile(targetPath, trimmed, 'utf8');
+    this.brokerCaPemCache = trimmed;
+    console.log(`[CERT-STORE] Wrote broker CA to ${targetPath}`);
+    return targetPath;
+  }
+
+  async writeLegacyRootCaPem(caPem) {
+    const trimmed = String(caPem).trim();
+    const content = `===== ROOT CA =====\n${trimmed}\n===== END ROOT CA =====\n`;
+    await fsp.mkdir(this.config.crtDir, { recursive: true });
+    await fsp.writeFile(this.paths.legacy.ca, content, 'utf8');
+    console.log(`[CERT-STORE] Wrote device root CA to ${this.paths.legacy.ca}`);
+  }
+
   loadBrokerCaPem() {
     const raw = process.env.MQTT_BROKER_CA;
     const host = this.config.urlHost;
 
     if (raw !== undefined && String(raw).trim() === '') {
       return { pem: null, resolvedPath: null };
+    }
+
+    if (this.brokerCaPemCache) {
+      const cachedPath = path.join(this.config.crtDir, 'broker-ca.crt');
+      return { pem: this.brokerCaPemCache, resolvedPath: cachedPath };
     }
 
     if (raw !== undefined && String(raw).trim() !== '') {

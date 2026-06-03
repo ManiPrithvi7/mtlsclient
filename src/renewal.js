@@ -52,11 +52,14 @@ function requestJson(urlString, method, body, extraOptions = {}) {
   });
 }
 
+function extractResponseRoot(responseJson) {
+  return responseJson.data && typeof responseJson.data === 'object' && !Array.isArray(responseJson.data)
+    ? responseJson.data
+    : responseJson;
+}
+
 function extractCertificatePayload(responseJson) {
-  const root =
-    responseJson.data && typeof responseJson.data === 'object' && !Array.isArray(responseJson.data)
-      ? responseJson.data
-      : responseJson;
+  const root = extractResponseRoot(responseJson);
 
   const certificate =
     root.certificate || root.deviceCertificate || root.device_cert || root.cert || root.certificate_pem;
@@ -66,6 +69,17 @@ function extractCertificatePayload(responseJson) {
   }
 
   return certificate.trim();
+}
+
+function extractCaCertificatePayload(responseJson) {
+  const root = extractResponseRoot(responseJson);
+  const ca = root.ca_certificate || root.caCertificate || root.rootCa || root.ca;
+
+  if (typeof ca !== 'string' || !ca.includes('BEGIN CERTIFICATE')) {
+    throw new Error('Backend did not return ca_certificate PEM');
+  }
+
+  return ca.trim();
 }
 
 class RenewalFlow {
@@ -119,4 +133,10 @@ class RenewalFlow {
   }
 }
 
-module.exports = { RenewalFlow, requestJson, extractCertificatePayload };
+module.exports = {
+  RenewalFlow,
+  requestJson,
+  extractResponseRoot,
+  extractCertificatePayload,
+  extractCaCertificatePayload,
+};

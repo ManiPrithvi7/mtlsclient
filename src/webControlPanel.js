@@ -5,7 +5,7 @@ const express = require('express');
 const { RenewalFlow } = require('./renewal');
 const { ReissueFlow } = require('./reissue');
 const { testMqttConnection } = require('./mqttClient');
-const { requestJson, extractCertificatePayload } = require('./renewal');
+const { requestJson, extractCertificatePayload, extractCaCertificatePayload } = require('./renewal');
 const { writeCertFiles } = require('./provisioning_write');
 
 class WebControlPanel {
@@ -28,9 +28,12 @@ class WebControlPanel {
 
     // Recovery portal (not linked from main UI)
     this.app.get('/recovery', (req, res) => {
-      const code = typeof req.query.code === 'string' ? req.query.code : '';
+      const token =
+        (typeof req.query.token === 'string' && req.query.token) ||
+        (typeof req.query.code === 'string' && req.query.code) ||
+        '';
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.send(this.renderRecoveryPortalHtml(code));
+      res.send(this.renderRecoveryPortalHtml(token));
     });
 
     this.app.get('/api/wifi/scan', async (_req, res) => {
@@ -57,8 +60,8 @@ class WebControlPanel {
     this.app.get('/api/cert-info', this.handleCertInfo.bind(this));
   }
 
-  renderRecoveryPortalHtml(code) {
-    const safeCode = String(code || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  renderRecoveryPortalHtml(token) {
+    const safeToken = String(token || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -83,8 +86,8 @@ class WebControlPanel {
   <h1>Device Recovery Portal</h1>
 
   <div class="card">
-    <div class="hint">Open this page with <code>?code=RECOVERY_CODE</code> from the dashboard.</div>
-    <div class="code" id="codeDisplay">${safeCode || '------'}</div>
+    <div class="hint">Open this page with <code>?token=RECOVERY_TOKEN</code> from the dashboard.</div>
+    <div class="code" id="codeDisplay">${safeToken || '------'}</div>
   </div>
 
   <div class="card">
@@ -94,8 +97,8 @@ class WebControlPanel {
     <label for="wifiPassword">WiFi Password</label>
     <input id="wifiPassword" type="password" placeholder="Enter WiFi password">
 
-    <label for="recoveryCode">Recovery Code</label>
-    <input id="recoveryCode" placeholder="e.g. 552109" value="${safeCode}">
+    <label for="recoveryToken">Recovery Token</label>
+    <input id="recoveryToken" placeholder="e.g. 552109" value="${safeToken}">
 
     <button id="restoreBtn">Restore Device</button>
     <div id="status" class="status" style="display:none;"></div>
@@ -122,7 +125,7 @@ class WebControlPanel {
     document.getElementById('restoreBtn').onclick = async () => {
       const ssid = document.getElementById('ssidSelect').value;
       const password = document.getElementById('wifiPassword').value;
-      const recoveryCode = document.getElementById('recoveryCode').value.replace(/\s+/g, '');
+      const token = document.getElementById('recoveryToken').value.replace(/\s+/g, '');
       const btn = document.getElementById('restoreBtn');
       btn.disabled = true;
       setStatus('Submitting recovery...', true);
@@ -132,7 +135,7 @@ class WebControlPanel {
         const res = await fetch('/api/recovery/restore', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ssid, password, recoveryCode })
+          body: JSON.stringify({ ssid, password, token })
         });
         const text = await res.text();
         let payload = null;
@@ -150,9 +153,10 @@ class WebControlPanel {
   }
 
   async handleRecoveryPortalRestore(req, res) {
-    const { ssid, password, recoveryCode } = req.body || {};
-    if (!ssid || !password || !recoveryCode) {
-      this.sendJsonError(res, 400, 'ssid, password, and recoveryCode are required', 'VALIDATION_ERROR');
+    const { ssid, password, token, recoveryCode } = req.body || {};
+    const recoveryToken = String(token || recoveryCode || '').replace(/\s+/g, '');
+    if (!ssid || !password || !recoveryToken) {
+      this.sendJsonError(res, 400, 'ssid, password, and token are required', 'VALIDATION_ERROR');
       return;
     }
 
@@ -171,25 +175,17 @@ class WebControlPanel {
       const { csrPem, keyPem } = generateKeyAndCsr(deviceId, process.env.CERT_CN_PREFIX || 'PROOF');
       await this.store.saveStaging(null, keyPem);
 
-      // Call backend to sign CSR using recovery_code
       const reissueResponse = await requestJson(
         new URL('/api/v1/certificates/reissue', this.config.backendUrl).toString(),
         'POST',
-        { device_id: deviceId, csr: csrPem, recovery_code: String(recoveryCode).replace(/\s+/g, '') },
+        { device_id: deviceId, csr: csrPem, recovery_token: recoveryToken },
       );
 
       const issuedCert = extractCertificatePayload(reissueResponse);
-      const root =
-        reissueResponse && reissueResponse.data && typeof reissueResponse.data === 'object' && !Array.isArray(reissueResponse.data)
-          ? reissueResponse.data
-          : reissueResponse;
-      const caCertificate = root.ca_certificate || root.caCertificate || root.rootCa || root.ca;
-      if (typeof caCertificate !== 'string' || !caCertificate.includes('BEGIN CERTIFICATE')) {
-        throw new Error('Backend did not return ca_certificate PEM');
-      }
+      const caCertificate = extractCaCertificatePayload(reissueResponse);
 
-      // Persist exactly like provisioning does
-      writeCertFiles(this.config.crtDir, { deviceCert: issuedCert, rootCa: caCertificate.trim(), keyPem });
+      await this.store.writeBrokerCaPem(caCertificate);
+      writeCertFiles(this.config.crtDir, { deviceCert: issuedCert, rootCa: caCertificate, keyPem });
       await this.store.initialize();
 
       if (this.stateMachine) await this.stateMachine.runAudit();
@@ -401,15 +397,16 @@ class WebControlPanel {
   }
 
   async handleReissue(req, res) {
-    const { recoveryCode, deviceId } = req.body || {};
-    if (!recoveryCode || !deviceId) {
-      this.sendJsonError(res, 400, 'recoveryCode and deviceId required', 'VALIDATION_ERROR');
+    const { token, recoveryCode, recoveryToken, deviceId } = req.body || {};
+    const resolvedToken = String(token || recoveryToken || recoveryCode || '').replace(/\s+/g, '');
+    if (!resolvedToken || !deviceId) {
+      this.sendJsonError(res, 400, 'token (or recoveryToken) and deviceId required', 'VALIDATION_ERROR');
       return;
     }
 
     try {
       const reissue = new ReissueFlow(this.config, this.store);
-      await reissue.run(recoveryCode, deviceId);
+      await reissue.run(resolvedToken, deviceId);
       if (this.stateMachine) await this.stateMachine.runAudit();
       const certInfo = await this.store.getCertificateInfo();
       res.json({
@@ -424,9 +421,10 @@ class WebControlPanel {
   }
 
   async handleFullRecovery(req, res) {
-    const { ssid, password, recoveryCode, deviceId } = req.body || {};
-    if (!ssid || !password || !recoveryCode || !deviceId) {
-      this.sendJsonError(res, 400, 'ssid, password, recoveryCode and deviceId are required', 'VALIDATION_ERROR');
+    const { ssid, password, token, recoveryCode, recoveryToken, deviceId } = req.body || {};
+    const resolvedToken = String(token || recoveryToken || recoveryCode || '').replace(/\s+/g, '');
+    if (!ssid || !password || !resolvedToken || !deviceId) {
+      this.sendJsonError(res, 400, 'ssid, password, token and deviceId are required', 'VALIDATION_ERROR');
       return;
     }
 
@@ -434,7 +432,7 @@ class WebControlPanel {
       const wifi = await this.attemptWifiConnection(ssid, password);
       await this.saveWifiCredentials(ssid, password);
       const reissue = new ReissueFlow(this.config, this.store);
-      await reissue.run(recoveryCode, deviceId);
+      await reissue.run(resolvedToken, deviceId);
 
       if (this.stateMachine) {
         await this.stateMachine.runAudit();

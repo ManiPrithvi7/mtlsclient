@@ -115,8 +115,11 @@ function loadRuntimeConfig() {
 
   const recoveryMode =
     env('RECOVERY_MODE', '0') === '1' || String(env('RECOVERY_MODE', '')).toLowerCase() === 'true';
-  const recoveryCode =
-    recoveryMode && nonEmpty(env('RECOVERY_CODE', '')) ? String(env('RECOVERY_CODE', '')).trim() : '';
+  const recoveryTokenRaw = recoveryMode
+    ? env('RECOVERY_TOKEN', env('RECOVERY_CODE', ''))
+    : '';
+  const recoveryToken =
+    recoveryMode && nonEmpty(recoveryTokenRaw) ? String(recoveryTokenRaw).trim() : '';
   const deviceId = nonEmpty(env('DEVICE_ID', '')) ? String(env('DEVICE_ID', '')).trim() : '';
 
   return {
@@ -145,7 +148,7 @@ function loadRuntimeConfig() {
     subscribeAll: env('SUBSCRIBE_ALL', '1') === '1',
     ipFamilyEnv: process.env.MQTT_IP_FAMILY,
     recoveryMode,
-    recoveryCode,
+    recoveryToken,
     deviceId,
   };
 }

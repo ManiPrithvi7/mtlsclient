@@ -88,8 +88,8 @@ class DeviceStateMachine {
       console.error('[STATE] Auto reissue skipped: BACKEND_URL (or PROVISIONING_SERVER_URL) is not configured.');
       return;
     }
-    if (!this.config.recoveryCode) {
-      console.error('[STATE] Auto reissue skipped: RECOVERY_CODE is not set.');
+    if (!this.config.recoveryToken) {
+      console.error('[STATE] Auto reissue skipped: RECOVERY_TOKEN (or RECOVERY_CODE) is not set.');
       return;
     }
     if (!this.config.deviceId) {
@@ -100,7 +100,7 @@ class DeviceStateMachine {
     console.log('[STATE] Starting automatic certificate reissue.');
     try {
       const reissue = new ReissueFlow(this.config, this.store);
-      await reissue.run(this.config.recoveryCode, this.config.deviceId);
+      await reissue.run(this.config.recoveryToken, this.config.deviceId);
       console.log('[STATE] Reissue succeeded. Re-running audit.');
       await this.runAudit();
     } catch (error) {
