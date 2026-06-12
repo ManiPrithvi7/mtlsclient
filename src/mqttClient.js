@@ -26,6 +26,29 @@ function formatConnectError(err) {
   return lines.join('\n');
 }
 
+/** Device + OTA topics aligned with proofmqtt / ESP32 firmware contract. */
+function buildSubscribeTopics(topicRoot, deviceId, subscribeAll) {
+  const topicPrefix = `${topicRoot}/${deviceId}`;
+  const broadcastCmd = `${topicRoot}/broadcast/cmd`;
+
+  if (subscribeAll) {
+    // Wildcard covers per-device cmd/ack; broadcast/cmd sits outside {deviceId}/.
+    return [`${topicPrefix}/#`, broadcastCmd];
+  }
+
+  return [
+    `${topicPrefix}/registration_ack`,
+    `${topicPrefix}/test-gmb`,
+    `${topicPrefix}/instagram`,
+    `${topicPrefix}/gmb`,
+    `${topicPrefix}/pos`,
+    `${topicPrefix}/promotion`,
+    `${topicPrefix}/cmd`,
+    `${topicPrefix}/ack`,
+    broadcastCmd,
+  ];
+}
+
 class MqttRuntimeClient {
   constructor(config, deviceKeys, brokerCa) {
     this.config = config;
@@ -36,15 +59,6 @@ class MqttRuntimeClient {
   createClient() {
     const { deviceId, ca, cert, key } = this.deviceKeys;
     const topicPrefix = `${this.config.topicRoot}/${deviceId}`;
-    const explicitSubtopics = [
-      `${topicPrefix}/registration_ack`,
-      `${topicPrefix}/test-gmb`,
-      `${topicPrefix}/instagram`,
-      `${topicPrefix}/gmb`,
-      `${topicPrefix}/pos`,
-      `${topicPrefix}/promotion`,
-    ];
-    const subscribeTopics = this.config.subscribeAll ? [`${topicPrefix}/#`] : explicitSubtopics;
     const isEmqxCloud = /\.emqxcloud\.com$/i.test(this.config.urlHost);
     const mqttUsername = this.config.cnAsUsername ? deviceId : this.config.username;
 
@@ -164,16 +178,11 @@ class MqttRuntimeClient {
   attachLifecycle(client) {
     const { deviceId } = this.deviceKeys;
     const topicPrefix = `${this.config.topicRoot}/${deviceId}`;
-    const subscribeTopics = this.config.subscribeAll
-      ? [`${topicPrefix}/#`]
-      : [
-          `${topicPrefix}/registration_ack`,
-          `${topicPrefix}/test-gmb`,
-          `${topicPrefix}/instagram`,
-          `${topicPrefix}/gmb`,
-          `${topicPrefix}/pos`,
-          `${topicPrefix}/promotion`,
-        ];
+    const subscribeTopics = buildSubscribeTopics(
+      this.config.topicRoot,
+      deviceId,
+      this.config.subscribeAll,
+    );
 
     client.on('connect', () => {
       console.log(`[MQTT] Connected. clientId=${deviceId}`);
@@ -331,6 +340,7 @@ function testMqttConnection(config, deviceKeys, brokerCa, timeoutMs = 10000) {
 
 module.exports = {
   MqttRuntimeClient,
+  buildSubscribeTopics,
   formatConnectError,
   testMqttConnection,
 };
