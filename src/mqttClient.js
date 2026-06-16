@@ -45,6 +45,7 @@ function buildSubscribeTopics(topicRoot, deviceId, subscribeAll) {
     `${topicPrefix}/promotion`,
     `${topicPrefix}/cmd`,
     `${topicPrefix}/ack`,
+    `${topicPrefix}/ota_update`,
     broadcastCmd,
   ];
 }
