@@ -1,6 +1,11 @@
 const { generateKeyAndCsr } = require('./provisioning');
 const { testMqttConnection } = require('./mqttClient');
-const { requestJson, extractCertificatePayload, extractCaCertificatePayload } = require('./renewal');
+const {
+  requestJson,
+  extractCertificatePayload,
+  extractCaCertificatePayload,
+  extractOptionalBrokerCaCertificatePayload,
+} = require('./renewal');
 
 /**
  * Certificate reissue flow (formerly src/recovery.js).
@@ -29,10 +34,13 @@ class ReissueFlow {
 
       const issuedCert = extractCertificatePayload(reissueResponse);
       const returnedCa = extractCaCertificatePayload(reissueResponse);
+      const brokerCaFromResponse = extractOptionalBrokerCaCertificatePayload(reissueResponse);
       await this.store.saveStaging(issuedCert, keyPem);
 
-      await this.store.writeBrokerCaPem(returnedCa);
       await this.store.writeLegacyRootCaPem(returnedCa);
+      if (brokerCaFromResponse) {
+        await this.store.writeBrokerCaPem(brokerCaFromResponse);
+      }
 
       const brokerCa = this.store.loadBrokerCaPem();
       await testMqttConnection(

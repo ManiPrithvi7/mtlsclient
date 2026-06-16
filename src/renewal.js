@@ -82,6 +82,22 @@ function extractCaCertificatePayload(responseJson) {
   return ca.trim();
 }
 
+function extractOptionalBrokerCaCertificatePayload(responseJson) {
+  const root = extractResponseRoot(responseJson);
+  const ca =
+    root.broker_ca_certificate ||
+    root.broker_ca ||
+    root.brokerCa ||
+    root.mqtt_broker_ca ||
+    root.mqttBrokerCa;
+
+  if (typeof ca !== 'string' || !ca.includes('BEGIN CERTIFICATE')) {
+    return null;
+  }
+
+  return ca.trim();
+}
+
 class RenewalFlow {
   constructor(config, store) {
     this.config = config;
@@ -139,4 +155,5 @@ module.exports = {
   extractResponseRoot,
   extractCertificatePayload,
   extractCaCertificatePayload,
+  extractOptionalBrokerCaCertificatePayload,
 };

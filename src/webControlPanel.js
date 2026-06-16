@@ -184,7 +184,6 @@ class WebControlPanel {
       const issuedCert = extractCertificatePayload(reissueResponse);
       const caCertificate = extractCaCertificatePayload(reissueResponse);
 
-      await this.store.writeBrokerCaPem(caCertificate);
       writeCertFiles(this.config.crtDir, { deviceCert: issuedCert, rootCa: caCertificate, keyPem });
       await this.store.initialize();
 

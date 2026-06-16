@@ -65,7 +65,7 @@ Something broken?
 Error	Fix
 Device ID not found in CSR	DEVICE_ID in .env doesn't match the dashboard — fix and retry
 unable to get local issuer certificate	Make sure USE_CUSTOM_CA=1 is in .env
-ERR_TLS_CERT_ALTNAME_INVALID	Add MQTT_TLS_VERIFY_HOST=nanomq-broker to .env
+ERR_TLS_CERT_ALTNAME_INVALID	Ensure MQTT_BROKER matches broker cert SAN (broker.withproof.io on OCI). For legacy TCP proxies only, set MQTT_TLS_VERIFY_HOST to the cert name.
 Token expired / already used	Get a fresh token from the dashboard
 Questions? Share the exact error line from the terminal with the backend team.
 
