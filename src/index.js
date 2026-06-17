@@ -3,6 +3,7 @@ const { CertificateStore } = require('./certificateStore');
 const { provisionDevice } = require('./provisioning');
 const { DeviceStateMachine } = require('./stateMachine');
 const { WebControlPanel } = require('./webControlPanel');
+const { OtaHandler } = require('./otaHandler');
 
 async function main() {
   const config = loadRuntimeConfig();
@@ -36,6 +37,14 @@ async function main() {
   });
 
   await stateMachine.start();
+
+  if (stateMachine.otaHandler && stateMachine.otaHandler.pendingVerifyActive()) {
+    console.log('[MQTT] Starting OTA pending verify task...');
+    setTimeout(async () => {
+      await stateMachine.otaHandler.runPendingVerify();
+    }, 2000);
+  }
+
   return { stateMachine, controlPanel };
 }
 

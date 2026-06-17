@@ -1,6 +1,7 @@
 const { MqttRuntimeClient } = require('./mqttClient');
 const { RenewalFlow } = require('./renewal');
 const { ReissueFlow } = require('./reissue');
+const { OtaHandler } = require('./otaHandler');
 
 class DeviceStateMachine {
   constructor(config, store) {
@@ -8,6 +9,7 @@ class DeviceStateMachine {
     this.store = store;
     this.currentState = 'INIT';
     this.mqttClient = null;
+    this.otaHandler = null;
   }
 
   async start() {
@@ -66,6 +68,32 @@ class DeviceStateMachine {
     const brokerCa = this.store.loadBrokerCaPem();
     this.mqttClient = new MqttRuntimeClient(this.config, deviceKeys, brokerCa).connect();
     console.log(`[STATE] Device entered OPERATIONAL state as ${deviceKeys.deviceId}`);
+
+    this.otaHandler = new OtaHandler(this.config, this.mqttClient, deviceKeys.deviceId);
+    await this.otaHandler.init();
+    await this.otaHandler.start();
+
+    this.attachOtaCallbacks();
+  }
+
+  attachOtaCallbacks() {
+    if (!this.otaHandler) return;
+
+    const deviceKeys = this.store.loadDeviceKeys();
+    const topicPrefix = `${this.config.topicRoot}/${deviceKeys.deviceId}`;
+
+    this.mqttClient.on('message', (topic, message) => {
+      const payload = message.toString('utf8');
+      if (topic === `${topicPrefix}/cmd`) {
+        this.otaHandler.onMqttCmd(topic, payload);
+      } else if (topic === `${topicPrefix}/ack`) {
+        this.otaHandler.onMqttAck(topic, payload);
+      }
+    });
+
+    this.mqttClient.on('connect', () => {
+      this.otaHandler.onMqttConnected();
+    });
   }
 
   async enterRenewal() {
