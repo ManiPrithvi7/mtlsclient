@@ -1,15 +1,19 @@
 const crypto = require('crypto');
 const http = require('http');
 const https = require('https');
+const tls = require('tls');
 const fs = require('fs');
 const path = require('path');
 const { env, nonEmpty } = require('./config');
+const { readFirstCertificatePemFromFile } = require('./device_keys_from_header');
+const { extractResponseRoot } = require('./renewal');
 
 class OtaHandler {
-  constructor(config, mqttClient, deviceId) {
+  constructor(config, mqttClient, deviceId, certificateStore = null) {
     this.config = config;
     this.mqttClient = mqttClient;
     this.deviceId = deviceId;
+    this.certificateStore = certificateStore;
     this.topicPrefix = `${config.topicRoot}/${deviceId}`;
     this.isActive = false;
     this.pendingManifest = null;
@@ -121,7 +125,12 @@ class OtaHandler {
 
     const manifest = {
       version: root.version || '',
-      download_url: root.download_url || '',
+      download_url:
+        root.download_url ||
+        root.oci_download_url ||
+        root.oci_url ||
+        root.par_url ||
+        '',
       sha256: root.sha256 || '',
       signature: root.signature || '',
       size_bytes: root.size_bytes || 0,
@@ -163,6 +172,34 @@ class OtaHandler {
     }
   }
 
+  isProxyDownloadUrl(url) {
+    if (!url) return false;
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== 'https:') return false;
+      return /\/api\/v1\/ota\/download\//i.test(parsed.pathname);
+    } catch {
+      return false;
+    }
+  }
+
+  requiresMtlsDownload(url) {
+    if (!url || this.isOciDownloadUrl(url) || this.isLocalLanDownloadUrl(url)) {
+      return false;
+    }
+
+    const base = this.resolveOtaApiBase();
+    if (!base) {
+      return this.isProxyDownloadUrl(url);
+    }
+
+    try {
+      return new URL(url).origin === new URL(base).origin;
+    } catch {
+      return this.isProxyDownloadUrl(url);
+    }
+  }
+
   resolveOtaApiBase() {
     const explicit = env('OTA_API_BASE', env('BACKEND_URL', env('PROVISIONING_SERVER_URL', '')));
     if (nonEmpty(explicit)) {
@@ -172,26 +209,77 @@ class OtaHandler {
   }
 
   loadDeviceTlsMaterial() {
+    if (this.certificateStore) {
+      const keys = this.certificateStore.loadDeviceKeys();
+      if (!keys?.cert || !keys?.key) {
+        throw new Error('Device mTLS cert/key missing — cannot fetch OTA offer from server');
+      }
+      return {
+        cert: keys.cert,
+        key: keys.key,
+        deviceCa: keys.ca || this.certificateStore.readLegacyCaPem() || '',
+      };
+    }
+
     const crtDir = this.config.crtDir || this.config.certPath;
     const certPath = path.join(crtDir, 'primary', 'client.crt');
     const keyPath = path.join(crtDir, 'primary', 'client.key');
-    const caCandidates = ['ca_root.pem', 'ca.crt', 'root-ca.crt', 'broker-ca.crt'];
-    let caPath;
+    const caCandidates = [
+      'ca_root.pem',
+      'ca.crt',
+      'root-ca.crt',
+      'broker-ca.crt',
+      'root_certifacite.txt',
+    ];
+    let deviceCa = '';
     for (const name of caCandidates) {
       const candidate = path.join(crtDir, name);
-      if (fs.existsSync(candidate)) {
-        caPath = candidate;
-        break;
+      if (!fs.existsSync(candidate)) continue;
+      if (name === 'root_certifacite.txt') {
+        deviceCa = readFirstCertificatePemFromFile(candidate) || '';
+      } else {
+        deviceCa = fs.readFileSync(candidate, 'utf8');
       }
+      if (deviceCa) break;
     }
     if (!fs.existsSync(certPath) || !fs.existsSync(keyPath)) {
-      throw new Error('Device mTLS cert/key missing — cannot fetch OCI OTA offer from server');
+      throw new Error('Device mTLS cert/key missing — cannot fetch OTA offer from server');
     }
     return {
-      cert: fs.readFileSync(certPath),
-      key: fs.readFileSync(keyPath),
-      ca: caPath ? fs.readFileSync(caPath) : undefined,
+      cert: fs.readFileSync(certPath, 'utf8'),
+      key: fs.readFileSync(keyPath, 'utf8'),
+      deviceCa,
     };
+  }
+
+  buildApiTlsOptions(parsedUrl, tlsMaterial) {
+    return {
+      hostname: parsedUrl.hostname,
+      port: parsedUrl.port || 443,
+      path: `${parsedUrl.pathname}${parsedUrl.search}`,
+      method: 'GET',
+      cert: tlsMaterial.cert,
+      key: tlsMaterial.key,
+      ca: tls.rootCertificates,
+      rejectUnauthorized: true,
+      servername: parsedUrl.hostname,
+      minVersion: 'TLSv1.2',
+    };
+  }
+
+  parseOfferDownloadUrl(responseJson) {
+    const root = extractResponseRoot(responseJson);
+    return root.download_url || root.oci_download_url || root.oci_url || root.par_url || '';
+  }
+
+  mtlsUnavailableMessage(statusCode, body) {
+    if (statusCode !== 401 || !/MTLS_REQUIRED/i.test(body)) {
+      return '';
+    }
+    return (
+      ' — server requires device mTLS but the HTTP edge cannot forward client certificates; ' +
+      'push an OCI presigned URL in download_url or expose OTA_API_BASE on an mTLS-capable endpoint'
+    );
   }
 
   async fetchOciDownloadUrlFromServer(version) {
@@ -205,41 +293,33 @@ class OtaHandler {
 
     return new Promise((resolve, reject) => {
       const parsed = new URL(url);
-      const req = https.request(
-        {
-          hostname: parsed.hostname,
-          port: parsed.port || 443,
-          path: `${parsed.pathname}${parsed.search}`,
-          method: 'GET',
-          cert: tlsMaterial.cert,
-          key: tlsMaterial.key,
-          ca: tlsMaterial.ca,
-          rejectUnauthorized: true,
-          servername: parsed.hostname,
-        },
-        (res) => {
-          let body = '';
-          res.on('data', (chunk) => {
-            body += chunk;
-          });
-          res.on('end', () => {
-            if (res.statusCode !== 200) {
-              reject(new Error(`OTA offer HTTP ${res.statusCode}: ${body.slice(0, 200)}`));
+      const req = https.request(this.buildApiTlsOptions(parsed, tlsMaterial), (res) => {
+        let body = '';
+        res.on('data', (chunk) => {
+          body += chunk;
+        });
+        res.on('end', () => {
+          if (res.statusCode !== 200) {
+            reject(
+              new Error(
+                `OTA offer HTTP ${res.statusCode}: ${body.slice(0, 200)}${this.mtlsUnavailableMessage(res.statusCode, body)}`,
+              ),
+            );
+            return;
+          }
+          try {
+            const json = JSON.parse(body);
+            const downloadUrl = this.parseOfferDownloadUrl(json);
+            if (!downloadUrl || !this.isOciDownloadUrl(downloadUrl)) {
+              reject(new Error('Server OTA offer did not return an OCI download_url'));
               return;
             }
-            try {
-              const json = JSON.parse(body);
-              if (!json.download_url || !this.isOciDownloadUrl(json.download_url)) {
-                reject(new Error('Server OTA offer did not return an OCI download_url'));
-                return;
-              }
-              resolve(json.download_url);
-            } catch (err) {
-              reject(err);
-            }
-          });
-        }
-      );
+            resolve(downloadUrl);
+          } catch (err) {
+            reject(err);
+          }
+        });
+      });
       req.on('error', reject);
       req.end();
     });
@@ -251,12 +331,18 @@ class OtaHandler {
     }
 
     if (this.isLocalLanDownloadUrl(manifest.download_url)) {
-      console.warn(
-        `[OTA] Ignoring LAN/dev download_url in MQTT payload: ${manifest.download_url}`
+      throw new Error(
+        `Stale LAN OTA manifest (${manifest.download_url}) — clear retained cmd and push a fresh update from server`
+      );
+    }
+
+    if (this.isProxyDownloadUrl(manifest.download_url)) {
+      console.log(
+        `[OTA] MQTT download_url is a server proxy — resolving OCI presigned URL for version ${manifest.version}`,
       );
     } else if (manifest.download_url) {
       console.warn(
-        `[OTA] Non-OCI download_url in MQTT payload — fetching fresh OCI PAR from server`
+        `[OTA] Unrecognized download_url in MQTT payload — fetching fresh OCI offer from server`,
       );
     }
 
@@ -273,6 +359,14 @@ class OtaHandler {
 
     if (this.pendingVerifyMode) {
       console.warn('[OTA] OTA update ignored — pending verify active');
+      return;
+    }
+
+    if (this.isLocalLanDownloadUrl(manifest.download_url)) {
+      console.warn(
+        `[OTA] Ignoring stale LAN/dev ota_update (${manifest.download_url}) — not queuing`
+      );
+      this.clearRetainedCmd();
       return;
     }
 
@@ -332,10 +426,28 @@ class OtaHandler {
   async applyUpdate(manifest) {
     console.log(`[OTA 3/10] Target partition info: size=${manifest.size_bytes || 'unknown'}`);
 
-    const downloadUrl = await this.resolveDownloadUrl(manifest);
+    let downloadUrl = await this.resolveDownloadUrl(manifest);
     console.log(`[OTA 4/10] HTTP GET ${downloadUrl}`);
 
-    const downloadResult = await this.downloadFirmware(downloadUrl, manifest.size_bytes);
+    let downloadResult;
+    try {
+      downloadResult = await this.downloadFirmware(downloadUrl, manifest.size_bytes);
+    } catch (error) {
+      const canRetryWithOci =
+        !this.isOciDownloadUrl(downloadUrl) &&
+        /HTTP 401|MTLS_REQUIRED/i.test(error.message || '');
+      if (!canRetryWithOci) {
+        throw error;
+      }
+
+      console.warn(
+        `[OTA] Download via API failed (${error.message}) — fetching OCI presigned URL from server`,
+      );
+      downloadUrl = await this.fetchOciDownloadUrlFromServer(manifest.version);
+      console.log(`[OTA 4/10] HTTP GET ${downloadUrl}`);
+      downloadResult = await this.downloadFirmware(downloadUrl, manifest.size_bytes);
+    }
+
     if (!downloadResult) {
       throw new Error('Failed to download firmware');
     }
@@ -371,63 +483,101 @@ class OtaHandler {
     return 'success';
   }
 
+  streamFirmwareResponse(response, file, sha256, expectedSize, tempFile, resolve, reject) {
+    let totalWritten = 0;
+    let lastLoggedPct = 0;
+
+    const statusCode = response.statusCode;
+    if (statusCode !== 200) {
+      reject(new Error(`HTTP ${statusCode}`));
+      return;
+    }
+
+    response.on('data', (chunk) => {
+      sha256.update(chunk);
+      file.write(chunk);
+      totalWritten += chunk.length;
+
+      if (expectedSize > 0) {
+        const pct = Math.floor((totalWritten * 100) / expectedSize);
+        if (pct >= 100) {
+          console.log(`[OTA 6/10] Downloaded ${totalWritten} / ${expectedSize} bytes (100%)`);
+        } else {
+          const milestone = Math.floor((pct / 25) * 25);
+          if (milestone > 0 && milestone > lastLoggedPct) {
+            lastLoggedPct = milestone;
+            console.log(`[OTA 6/10] Downloaded ${totalWritten} / ${expectedSize} bytes (${milestone}%)`);
+          }
+        }
+      }
+    });
+
+    response.on('end', () => {
+      file.end();
+      resolve({
+        filePath: tempFile,
+        sha256: sha256.digest('hex'),
+        size: totalWritten,
+      });
+    });
+
+    response.on('error', (err) => {
+      file.close();
+      if (fs.existsSync(tempFile)) {
+        fs.unlinkSync(tempFile);
+      }
+      reject(err);
+    });
+  }
+
   async downloadFirmware(url, expectedSize) {
     return new Promise((resolve, reject) => {
       const tempFile = path.join(require('os').tmpdir(), `ota_${Date.now()}.bin`);
       const file = fs.createWriteStream(tempFile);
       const sha256 = crypto.createHash('sha256');
 
-      let totalWritten = 0;
-      let lastLoggedPct = 0;
-
       console.log(`[OTA 6/10] Downloading ${url} to ${tempFile}`);
 
       const parsedUrl = new URL(url);
-      const client = parsedUrl.protocol === 'https:' ? https : http;
-      const request = client.get(url, (response) => {
-        const statusCode = response.statusCode;
-        if (statusCode !== 200) {
-          reject(new Error(`HTTP ${statusCode} for ${url}`));
-          return;
-        }
-
-        response.on('data', (chunk) => {
-          sha256.update(chunk);
-          file.write(chunk);
-          totalWritten += chunk.length;
-
-          if (expectedSize > 0) {
-            const pct = Math.floor((totalWritten * 100) / expectedSize);
-            if (pct >= 100) {
-              console.log(`[OTA 6/10] Downloaded ${totalWritten} / ${expectedSize} bytes (100%)`);
-            } else {
-              const milestone = Math.floor((pct / 25) * 25);
-              if (milestone > 0 && milestone > lastLoggedPct) {
-                lastLoggedPct = milestone;
-                console.log(`[OTA 6/10] Downloaded ${totalWritten} / ${expectedSize} bytes (${milestone}%)`);
-              }
-            }
-          }
-        });
-
-        response.on('end', () => {
-          file.end();
-          const calculatedSha256 = sha256.digest('hex');
-          resolve({
-            filePath: tempFile,
-            sha256: calculatedSha256,
-            size: totalWritten,
-          });
-        });
-      });
-
-      request.on('error', (err) => {
+      const onError = (err) => {
         file.close();
         if (fs.existsSync(tempFile)) {
           fs.unlinkSync(tempFile);
         }
         reject(err);
+      };
+
+      if (this.requiresMtlsDownload(url)) {
+        const tlsMaterial = this.loadDeviceTlsMaterial();
+        const req = https.request(this.buildApiTlsOptions(parsedUrl, tlsMaterial), (response) => {
+          this.streamFirmwareResponse(
+            response,
+            file,
+            sha256,
+            expectedSize,
+            tempFile,
+            resolve,
+            reject
+          );
+        });
+        req.on('error', onError);
+        req.end();
+        return;
+      }
+
+      const client = parsedUrl.protocol === 'https:' ? https : http;
+      const request = client.get(url, (response) => {
+        this.streamFirmwareResponse(
+          response,
+          file,
+          sha256,
+          expectedSize,
+          tempFile,
+          resolve,
+          reject
+        );
       });
+      request.on('error', onError);
     });
   }
 

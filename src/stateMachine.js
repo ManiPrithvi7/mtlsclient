@@ -69,7 +69,7 @@ class DeviceStateMachine {
     this.mqttClient = new MqttRuntimeClient(this.config, deviceKeys, brokerCa).connect();
     console.log(`[STATE] Device entered OPERATIONAL state as ${deviceKeys.deviceId}`);
 
-    this.otaHandler = new OtaHandler(this.config, this.mqttClient, deviceKeys.deviceId);
+    this.otaHandler = new OtaHandler(this.config, this.mqttClient, deviceKeys.deviceId, this.store);
     await this.otaHandler.init();
     await this.otaHandler.start();
 
